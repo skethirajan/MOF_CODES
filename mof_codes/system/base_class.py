@@ -3,6 +3,8 @@ import ase
 import ase.io
 import ase.cell
 from ase.neighborlist import natural_cutoffs, NeighborList
+from scipy.sparse.csgraph import connected_components
+import numpy as np
 
 
 class System:
@@ -60,7 +62,12 @@ class System:
 
         self.atoms: Optional[ase.atoms.Atoms] = None
         self.is_ase_atoms: bool = True
-        self.map_indices: Optional[dict[int, int]] = None  # becomes dict[int, int] only when self.is_ase_atoms is false
+
+        # becomes dict[int, int] only when self.is_ase_atoms is false
+        self.map_indices: Optional[dict[int, int]] = None
+
+        # becomes list[ase.atoms.Atom] only when self.is_ase_atoms is false
+        self.list_of_atom: Optional[list[ase.atoms.Atom]] = None
 
         if isinstance(atoms, str):  # atoms is a file
             index = kwargs["index"] if kwargs.get("index") else -1
@@ -73,6 +80,7 @@ class System:
                     self.is_ase_atoms = False
                     self.atoms = self._convert_to_ase_atoms(atoms, kwargs["cell"])
                     self.map_indices = self._mapping_indices(atoms)
+                    self.list_of_atom = atoms
 
         if not self.atoms:
             raise "self.atoms is None. Check the atoms argument while creating an instance of the Class."
@@ -99,6 +107,11 @@ class System:
         neighborlist = NeighborList(cutoffs=self._get_natural_cutoffs, self_interaction=False, bothways=True)
         neighborlist.update(self.atoms)
         return neighborlist
+
+    @property
+    def _connected_components(self) -> tuple[int, np.ndarray]:
+        nl = self._get_neighborlist
+        return connected_components(nl.get_connectivity_matrix())
 
     def _get_index_connectivity(self, atom: ase.atoms.Atom) -> list[int]:
         """Method that returns indices of first neighbor atoms as list for a given atom.
@@ -137,17 +150,17 @@ class System:
         return indices_connectivity
 
 
-if __name__ == '__main__':
-    system = System(atoms="./ase_atoms/other_structures/ZIF-8.traj", metal_elements=['Zn'])
-    print('0:', system._get_index_connectivity(system.atoms[0]))
-    print('1:', system._get_index_connectivity(system.atoms[1]))
-    # atoms1 = ase.io.read("./ase_atoms/other_structures/ZIF-8.traj", format="traj", index=-1)
-    # system = System(atoms=atoms1)
-    # print(system._get_index_connectivity(system.atoms[0]))
-    atoms_ = ase.io.read("./ase_atoms/other_structures/ZIF-8.traj", format="traj", index=-1)
-    atoms1 = [atoms_[0], atoms_[1], atoms_[216], atoms_[238], atoms_[2], atoms_[96], atoms_[46]]
-    cell1 = atoms_.cell
-    system = System(atoms=atoms1, cell=cell1)
-    # print(system.map_indices)
-    # print(system._get_index_connectivity(system.atoms[0]))
-    print(system._get_indices_connectivity)
+# if __name__ == '__main__':
+#     system = System(atoms="./ase_atoms/other_structures/ZIF-8.traj", metal_elements=['Zn'])
+#     print('0:', system._get_index_connectivity(system.atoms[0]))
+#     print('1:', system._get_index_connectivity(system.atoms[1]))
+#     # atoms1 = ase.io.read("./ase_atoms/other_structures/ZIF-8.traj", format="traj", index=-1)
+#     # system = System(atoms=atoms1)
+#     # print(system._get_index_connectivity(system.atoms[0]))
+#     atoms_ = ase.io.read("./ase_atoms/other_structures/ZIF-8.traj", format="traj", index=-1)
+#     atoms1 = [atoms_[0], atoms_[1], atoms_[216], atoms_[238], atoms_[2], atoms_[96], atoms_[46]]
+#     cell1 = atoms_.cell
+#     system = System(atoms=atoms1, cell=cell1)
+#     # print(system.map_indices)
+#     # print(system._get_index_connectivity(system.atoms[0]))
+#     print(system._get_indices_connectivity)
