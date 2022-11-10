@@ -151,6 +151,6 @@ class MOF:
 
 
 if __name__ == '__main__':
-    mof = MOF("./ase_atoms/ZIF-8.traj", metal_elements=['Zn'])
+    mof = MOF("./ase_atoms/other_structures/ZIF-8.traj", metal_elements=['Zn'])
     print(mof._get_index_connectivity(mof.atoms[0]))
 
