@@ -1,37 +1,14 @@
 from typing import Union, Optional
 import ase
 import ase.io
-from ase.neighborlist import natural_cutoffs, NeighborList
+import ase.geometry
+from base_class import System
+from ase.visualize import view
+import numpy as np
 
 
-class MOF:
+class MOF(System):
     """Class to extract MOF info, manipulate linkers, and metal nodes, & also can add adsorbates"""
-
-    @staticmethod
-    def read_atoms(atoms: str, index: int) -> ase.atoms.Atoms:
-        """Method to read the MOF structure file.
-        
-        Parameters
-        ----------
-        atoms: str
-            Path of the file containing MOF structure.
-        index: int
-            MOF structure at this configuration will be used.
-
-        Returns
-        -------
-        ase.atoms.Atoms object of the MOF structure
-        """
-
-        if isinstance(atoms, str):
-            if ".traj" in atoms:
-                return ase.io.read(filename=atoms, index=index, format="traj")
-            elif ".xyz" in atoms:
-                return ase.io.read(filename=atoms, index=index, format="xyz")
-            elif ".xml" in atoms:
-                return ase.io.read(filename=atoms, index=index, format="vasp-xml")
-            else:
-                raise "Check the format of the file name to read."
 
     def __init__(self, atoms: Union[ase.atoms.Atoms, str], **kwargs: Union[int, list]) -> None:
         """Will create an instance/ object of class MOF.
@@ -44,15 +21,14 @@ class MOF:
             Can take any number of keyword arguments.
         """
 
-        self.atoms: Optional[ase.atoms.Atoms] = None
+        super().__init__(atoms, **kwargs)
+        self.mof_atoms: Optional[list[ase.atoms.Atom]] = None
+        self.adsorbates: Optional[list[ase.atoms.Atom]] = None
         self.metal_atoms: Optional[list[ase.atoms.Atom]] = None
         self.linker_atoms: Optional[list[ase.atoms.Atom]] = None
+        self.linker_clusters: Optional[dict[int, list[ase.atoms.Atom]]] = None
 
-        if not isinstance(atoms, ase.atoms.Atoms):
-            index = kwargs["index"] if kwargs.get("index") else -1
-            self.atoms = self.read_atoms(atoms, index)
-        else:
-            self.atoms = atoms
+        self.adsorbates, self.mof_atoms = self._filter_structure()
 
         if kwargs.get("metal_elements"):
             self.set_metal_atoms(metal_elements=kwargs["metal_elements"])
@@ -61,6 +37,24 @@ class MOF:
 
         if self.metal_atoms:  # only when self.metal_atoms is not None, self.set_linker_atoms() method is called
             self.set_linker_atoms()
+            if self.linker_atoms:
+                self.linker_clusters: dict[int, list[ase.atoms.Atom]] = self._get_linker_clusters()
+
+    def _filter_structure(self):
+        clusters = self._clusters
+        adsorbates = {}
+        mof_atoms = []
+        if len(clusters.keys()) > 1:
+            i = 1
+            for cls_atoms in list(clusters.values()):
+                if len(cls_atoms) < 50:  # number of atoms in each adsorbate should be less than 50 else it is a MOF
+                    adsorbates.update({i: cls_atoms})
+                    i += 1
+                else:
+                    mof_atoms.append(cls_atoms)
+        else:
+            mof_atoms = list(clusters.values())
+        return adsorbates, *mof_atoms
 
     def set_metal_atoms(self, metal_elements: Optional[list[str]] = None, metal_indices: Optional[list[int]] = None) \
             -> None:
@@ -77,9 +71,9 @@ class MOF:
 
         metal_atoms = None
         if metal_elements:
-            metal_atoms = [atom for atom in self.atoms if atom.symbol in metal_elements]
+            metal_atoms = [atom for atom in self.mof_atoms if atom.symbol in metal_elements]
         elif metal_indices:
-            metal_atoms = [atom for atom in self.atoms if atom.index in metal_indices]
+            metal_atoms = [atom for atom in self.mof_atoms if atom.index in metal_indices]
 
         if metal_atoms:
             self.metal_atoms: list[ase.atoms.Atom] = metal_atoms
@@ -93,64 +87,112 @@ class MOF:
 
         if self.metal_atoms:
             metal_indices = [atom.index for atom in self.metal_atoms]
-            self.linker_atoms: list[ase.atoms.Atom] = [atom for atom in self.atoms if atom.index not in metal_indices]
+            self.linker_atoms: list[ase.atoms.Atom] = [atom for atom in self.mof_atoms
+                                                       if atom.index not in metal_indices]
         else:
             raise "First set metal nodes."
 
-    @property
-    def _get_natural_cutoffs(self) -> list[float]:
-        """Method to calculate natural cutoffs of atoms in MOF based on covalent radii.
+    def _is_metal_atom(self, atom_1: ase.atoms.Atom) -> bool:
+        for atom_2 in self.metal_atoms:
+            if self._compare_two_atoms(atom1=atom_1, atom2=atom_2):
+                return True
+        else:
+            return False
 
-        Returns
-        -------
-        ase atoms length list of float values based on the covalent radii.
-        """
-        return natural_cutoffs(self.atoms)
+    def _is_linker_atom(self, atom_1: ase.atoms.Atom) -> bool:
+        for cluster_id, cluster_atoms in self.linker_clusters.items():
+            for atom_2 in cluster_atoms:
+                if self._compare_two_atoms(atom1=atom_1, atom2=atom_2):
+                    return True
+        else:
+            return False
 
-    @property
-    def _get_neighborlist(self) -> ase.neighborlist.NeighborList:
-        """Method that returns an instance of the ase.neighborlist.NeighborList class based on natural_cutoffs of MOF.
+    def _is_adsorbate_atom(self, atom_1: ase.atoms.Atom) -> bool:
+        for ads_id, ads_atoms in self.adsorbates.items():
+            for atom_2 in ads_atoms:
+                if self._compare_two_atoms(atom1=atom_1, atom2=atom_2):
+                    return True
+        else:
+            return False
 
-        Returns
-        -------
-        ase.neighborlist.NeighborList class object for "atoms" attribute of MOF class.
-        """
+    def _get_linker_clusters(self) -> dict[int, list[ase.atoms.Atom]]:
+        return System(atoms=self.linker_atoms, cell=self.atoms.cell)._clusters
 
-        neighborlist = NeighborList(cutoffs=self._get_natural_cutoffs, self_interaction=False, bothways=True)
-        neighborlist.update(self.atoms)
-        return neighborlist
+    def _get_cluster_id_of_linker_atom(self, linker_atom_1: ase.atoms.Atom) -> Optional[int]:
+        for cluster_id, cluster_atoms in self.linker_clusters.items():
+            for atom_2 in cluster_atoms:
+                if self._compare_two_atoms(atom1=linker_atom_1, atom2=atom_2):
+                    return cluster_id
+        else:
+            return None
 
-    def _get_index_connectivity(self, atom: ase.atoms.Atom) -> list[int]:
-        """Method that returns indices of first neighbor atoms as list for a given atom in MOF.
+    def _get_cluster_ids_of_metal_atom(self, metal_atom_1: ase.atoms.Atom) -> Optional[list[int]]:
+        neighbor_indices = self._get_index_connectivity(atom=metal_atom_1)
+        neighbor_atoms = [self.atoms[index] for index in neighbor_indices]
+        cluster_ids = []
+        for atom_2 in neighbor_atoms:
+            cluster_id = self._get_cluster_id_of_linker_atom(linker_atom_1=atom_2)
+            if cluster_id:  # not None
+                cluster_ids.append(cluster_id)
+        return cluster_ids
 
-        Parameters
-        ----------
-        atom: ase.atoms.Atom
-            Atom whose first neighbors to be found.
+    def _get_cluster_connectivity(self, cls_id: int, only_linkers: bool = True) \
+            -> dict[ase.atoms.Atom, list[ase.atoms.Atom]]:
+        cluster_atoms = self.linker_clusters[cls_id]
+        metal_indices = [atom.index for atom in self.metal_atoms]
+        cluster_connectivity = {}
+        metal_indices_found = set()
 
-        Returns
-        -------
-        list of indices of primary neighbors for the given atom.
-        """
-        neighborlist = self._get_neighborlist
-        return list(neighborlist.get_neighbors(atom.index)[0])
+        for atom1 in cluster_atoms:
+            neighbor_indices = [index for index in self._get_index_connectivity(atom=atom1)]
+            if only_linkers:
+                allowed_indices = list(set(neighbor_indices) - set(metal_indices))
+            else:
+                allowed_indices = neighbor_indices
+                if set(metal_indices) & set(allowed_indices):
+                    metal_indices_found.update(set(metal_indices) & set(allowed_indices))
+            allowed_indices.sort(key=lambda ind: self.atoms[ind].symbol)
+            cluster_connectivity.update({atom1: [self.atoms[index] for index in allowed_indices]})
 
-    @property
-    def _get_indices_connectivity(self) -> dict[int, list[int]]:
-        """Method that returns indices of first neighbor atoms for all the atoms as dictionary in the MOF.
+        if metal_indices_found:  # i.e. when only_linkers is false
+            for index in metal_indices_found:
+                metal_atom = self.atoms[index]
+                allowed_metal_neighbors = []
+                metal_neighbors = self._get_index_connectivity(atom=metal_atom)
+                for i in metal_neighbors:
+                    neighbor_atom = self.atoms[i]
+                    if self._get_cluster_id_of_linker_atom(linker_atom_1=neighbor_atom) == cls_id:
+                        allowed_metal_neighbors.append(neighbor_atom)
+                else:
+                    cluster_connectivity.update({metal_atom: allowed_metal_neighbors})
+        return cluster_connectivity
 
-        Returns
-        -------
-        Dictionary with key as atom index and values as a list of its neighbor indices.
-        """
-        indices_connectivity = {}
-        for atom in self.atoms:
-            neighbor_indices = self._get_index_connectivity(atom)
-            indices_connectivity.update({atom.index: neighbor_indices})
-        return indices_connectivity
+    def extract_linker_molecule(self, cls_id, only_linkers=False) -> ase.atoms.Atoms:
+        cluster_connectivity = self._get_cluster_connectivity(cls_id, only_linkers)
+        atoms = ase.atoms.Atoms(list(cluster_connectivity.keys()), pbc=True, cell=self.atoms.cell)
+        return self.center_molecule(atoms)
+
+    @staticmethod
+    def center_molecule(atoms: ase.atoms.Atoms) -> ase.atoms.Atoms:
+        distances_with_mic = atoms.get_distances(a=0, indices=np.arange(0, len(atoms)), mic=True, vector=True)
+        distances_without_mic = atoms.get_distances(a=0, indices=np.arange(0, len(atoms)), mic=False, vector=True)
+        displacement = distances_with_mic - distances_without_mic
+        atoms.translate(displacement)
+        atoms.center()
+        return atoms
 
 
 if __name__ == '__main__':
-    mof = MOF("./ase_atoms/ZIF-8.traj", metal_elements=['Zn'])
-    print(mof._get_index_connectivity(mof.atoms[0]))
-
+    system = MOF("./ase_atoms/relaxed_structures/mof-6_relax.traj", metal_elements=['Zn'])
+    molecule = system.extract_linker_molecule(cls_id=1, only_linkers=False)
+    N_indices = [atom.index for atom in molecule if atom.symbol == 'N']
+    Zn_indices = [atom.index for atom in molecule if atom.symbol == 'Zn']
+    new_molecule = []
+    for Zn_ind in Zn_indices:
+        distances = list(molecule.get_distances(Zn_ind, indices=N_indices))
+        N_index = distances.index(min(distances))
+        molecule[Zn_ind].symbol = 'H'
+        molecule.set_distance(a0=N_index, a1=Zn_ind, fix=0.5, distance=-1.6, indices=[Zn_ind], add=True)
+    # view(molecule)
+    # ase.io.write("./ase_atoms/initial_structures/linker-6_initial.traj", molecule)
+    print(molecule)
