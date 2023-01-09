@@ -15,7 +15,7 @@ def base_calc() -> ase.calculators.vasp.Vasp:
                 isif=3,          # sets either relaxation or molecular dynamics runs
                 ibrion=2,        # determines how the ions are updated and moved, 2 implements conjugate gradient algo
                 nsw=100,         # sets the maximum number of ionic steps
-                nelm=60,        # sets the maximum number of electronic self-consistency steps
+                nelm=60,         # sets the maximum number of electronic self-consistency steps
                 nelmin=4,        # specifies the minimum number of electronic self-consistency steps
                 nelmdl=-4,       # specifies the number of non-self-consistent steps at the beginning, -ve means only in first ionic step
                 ispin=2,         # spin-polarized calculations are performed, needs to be true for all radicals
@@ -77,4 +77,10 @@ def npt_calc() -> ase.calculators.vasp.Vasp:
 def spe_calc() -> ase.calculators.vasp.Vasp:
     calc = base_calc()
     calc.set(encut=520, nsw=500, nelm=100)
+    return calc
+
+
+def vtst_neb_calc(my_images) -> ase.calculators.vasp.Vasp:
+    calc = base_calc()
+    calc.set(encut=400, ediffg=-0.05, isif=2, potim=0.2, nsw=500, nelm=100)
     return calc
